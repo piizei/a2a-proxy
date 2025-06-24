@@ -1,0 +1,43 @@
+proxy:
+  id: "proxy-follower"
+  role: "follower"
+  port: 8083
+
+servicebus:
+  namespace: "a2aproxy"
+  # connectionString: "Endpoint=sb://a2a-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=YOUR_KEY_HERE"
+  defaultMessageTtl: 3600  # 1 hour
+  maxRetryCount: 3
+  receiveTimeout: 30  # seconds
+
+# This proxy hosts both the critic and writer agents
+hostedAgents:
+  blog-agents:
+    - critic
+    - writer
+
+# Subscribe to messages targeting both critic and writer
+subscriptions:
+  - group: "blog-agents"
+    filter: "toAgent = 'critic'"
+  - group: "blog-agents"
+    filter: "toAgent = 'writer'"
+
+limits:
+  maxConcurrentStreams: 200
+  maxMessageSize: 1048576  # 1MB
+  streamBufferSize: 10485760  # 10MB
+  queueDepthThreshold: 5000
+
+monitoring:
+  metricsPort: 9091  # Different port from writer
+  healthPort: 8082   # Different port from writer
+  logLevel: "info"
+
+sessions:
+  store_type: "file"
+  file_store:
+    base_directory: "./data/sessions-proxy-follower"
+  default_ttl: 3600  # 1 hour
+  cleanup_interval: 300  # 5 minutes
+  max_sessions: 10000

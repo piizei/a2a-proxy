@@ -1,0 +1,41 @@
+proxy:
+  id: "proxy-writer"
+  role: "coordinator"
+  port: 8082
+
+servicebus:
+  namespace: sb://a2aproxy.servicebus.windows.net
+  # connectionString: "Endpoint=sb://a2aproxy.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=test-key"
+  # When connectionString is omitted, the client will use Azure managed identity for authentication
+  defaultMessageTtl: 3600  # 1 hour
+  maxRetryCount: 3
+  receiveTimeout: 30  # seconds
+
+# This proxy hosts the writer agent
+hostedAgents:
+  blog-agents:
+    - writer
+
+# Subscribe to messages targeting the writer
+subscriptions:
+  - group: "blog-agents"
+    filter: "toAgent = 'writer'"
+
+limits:
+  maxConcurrentStreams: 200
+  maxMessageSize: 1048576  # 1MB
+  streamBufferSize: 10485760  # 10MB
+  queueDepthThreshold: 5000
+
+monitoring:
+  metricsPort: 9090
+  healthPort: 8081
+  logLevel: "info"
+
+sessions:
+  store_type: "file"
+  file_store:
+    base_directory: "./data/sessions-writer"
+  default_ttl: 3600  # 1 hour
+  cleanup_interval: 300  # 5 minutes
+  max_sessions: 10000

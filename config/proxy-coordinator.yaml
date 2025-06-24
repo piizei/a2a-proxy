@@ -1,0 +1,52 @@
+proxy:
+  id: "proxy-1"
+  role: "coordinator"
+  port: 8080
+
+servicebus:
+  namespace: "a2aproxy"
+  #connectionString: "Endpoint=sb://a2a-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=test-key"
+  defaultMessageTtl: 3600  # 1 hour
+  maxRetryCount: 3
+  receiveTimeout: 30  # seconds
+
+# This proxy is a coordinator that doesn't host agents directly
+# It only manages Service Bus topics and forwards requests
+hostedAgents: {}
+
+# No subscriptions needed since we don't host any agents
+# All message routing is handled through Service Bus topics
+subscriptions: []
+
+limits:
+  maxConcurrentStreams: 200
+  maxMessageSize: 1048576  # 1MB
+  streamBufferSize: 10485760  # 10MB
+  queueDepthThreshold: 5000
+
+monitoring:
+  metricsPort: 9090
+  healthPort: 8081
+  logLevel: "info"
+
+sessions:
+  store_type: "file"
+  file_store:
+    base_directory: "./data/sessions"
+  default_ttl: 3600  # 1 hour
+  cleanup_interval: 300  # 5 minutes
+  max_sessions: 10000
+
+agentGroups:
+  - name: "blog-agents"
+    description: "Blog writing and editing agents"
+    maxMessageSizeMB: 2
+    messageTTLSeconds: 3600
+    enablePartitioning: true
+    duplicateDetectionWindowMinutes: 10
+  - name: "research-agents"
+    description: "Research and analysis agents"
+    maxMessageSizeMB: 5
+    messageTTLSeconds: 7200
+    enablePartitioning: true
+    duplicateDetectionWindowMinutes: 15
