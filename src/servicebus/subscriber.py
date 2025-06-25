@@ -3,10 +3,15 @@
 import asyncio
 import json
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
 
 from .client import AzureServiceBusClient
-from .models import ServiceBusConfig, ServiceBusMessage, ServiceBusSubscription, ServiceBusMessageType
+from .models import (
+    ServiceBusConfig,
+    ServiceBusMessage,
+    ServiceBusMessageType,
+    ServiceBusSubscription,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +39,13 @@ class MessageSubscriber:
         self._active_subscriptions: dict[str, ServiceBusSubscription] = {}
 
     async def start_subscriptions(self, subscription_configs: list[dict[str, str]]) -> None:
-        """Start message subscriptions based on configuration.
+        """Start message subscriptions for requests and responses.
 
         Args:
             subscription_configs: List of subscription configurations
         """
+        groups: set[str] = set()
+
         for sub_config in subscription_configs:
             group = sub_config.get("group", "")
             filter_rule = sub_config.get("filter", "")
@@ -47,40 +54,56 @@ class MessageSubscriber:
                 logger.warning("Subscription config missing group")
                 continue
 
-            # Generate subscription name (should match what SubscriptionManager creates)
-            subscription_name = self._generate_subscription_name(group, filter_rule)
-            
-            # Handle special case for notifications (same logic as SubscriptionManager)
-            if group == "notifications":
-                topic_name = "a2a-notifications"  # Use dedicated notification topic
-            else:
-                topic_name = f"a2a.{group}.requests"
+            groups.add(group)
 
-            # Create subscription handler
+            subscription_name = self._generate_subscription_name(group, filter_rule)
+
+            topic_name = "a2a-notifications" if group == "notifications" else f"a2a.{group}.requests"
+
             subscription = ServiceBusSubscription(
                 name=subscription_name,
                 topic_name=topic_name,
                 filter_rule=filter_rule,
                 max_delivery_count=self.config.max_retry_count,
                 lock_duration=60,
-                default_message_ttl=self.config.default_message_ttl
+                default_message_ttl=self.config.default_message_ttl,
             )
 
-            # Start subscription task
             task_key = f"{topic_name}:{subscription_name}"
             if task_key not in self._subscription_tasks:
                 logger.info(f"Starting subscription: {subscription_name} on topic: {topic_name}")
-
-                # Create message handler
                 handler = self._create_message_handler(group, filter_rule)
-
-                # Create subscription
                 success = await self.client.create_subscription(subscription, handler)
-
                 if success:
                     logger.info(f"Subscription started: {subscription_name}")
+                    self._active_subscriptions[subscription_name] = subscription
                 else:
                     logger.error(f"Failed to start subscription: {subscription_name}")
+
+        # Also subscribe to response topics so we receive replies
+        for group in {g for g in groups if g != "notifications"}:
+            topic_name = f"a2a.{group}.responses"
+            sub_name = f"{self.proxy_id}-responses-{group}"
+            filter_rule = f"fromProxy = '{self.proxy_id}'"
+            subscription = ServiceBusSubscription(
+                name=sub_name,
+                topic_name=topic_name,
+                filter_rule=filter_rule,
+                max_delivery_count=self.config.max_retry_count,
+                lock_duration=60,
+                default_message_ttl=self.config.default_message_ttl,
+            )
+
+            task_key = f"{topic_name}:{sub_name}"
+            if task_key not in self._subscription_tasks:
+                logger.info(f"Starting response subscription: {sub_name} on topic: {topic_name}")
+                handler = self._create_message_handler(group, filter_rule)
+                success = await self.client.create_subscription(subscription, handler)
+                if success:
+                    logger.info(f"Response subscription started: {sub_name}")
+                    self._active_subscriptions[sub_name] = subscription
+                else:
+                    logger.error(f"Failed to start response subscription: {sub_name}")
 
     def _generate_subscription_name(self, group: str, filter_rule: str) -> str:
         """Generate subscription name to match SubscriptionManager."""
@@ -104,18 +127,18 @@ class MessageSubscriber:
             """Handle incoming message from Service Bus."""
             try:
                 logger.info(f"Received message for group {group}: {message.message_id}, type: {message.message_type}")
-                
+
                 # Import here to avoid circular import
                 from ..main import pending_request_manager
-                
+
                 # If this is a response message, try to correlate it with a pending request
                 if message.message_type == ServiceBusMessageType.RESPONSE and pending_request_manager:
                     correlation_id = message.correlation_id
-                    
+
                     # Parse the payload as JSON for agent card responses
                     try:
                         response_data = json.loads(message.payload.decode('utf-8'))
-                        
+
                         # Try to handle as a response
                         if pending_request_manager.handle_response(correlation_id, response_data):
                             logger.info(f"Response correlated with pending request: {correlation_id}")
@@ -128,7 +151,7 @@ class MessageSubscriber:
                         if pending_request_manager.handle_response(correlation_id, message.payload):
                             logger.info(f"Response correlated with pending request (raw payload): {correlation_id}")
                             return
-                
+
                 # For other message types or if not correlated, route to appropriate agent
                 if message.message_type == ServiceBusMessageType.REQUEST:
                     # This is an incoming request that needs to be routed to a local agent
@@ -136,7 +159,7 @@ class MessageSubscriber:
                 else:
                     # For other message types, just log for now
                     logger.info(f"Message requires routing to local agent (type: {message.message_type}, not yet implemented)")
-                
+
             except Exception as e:
                 logger.error(f"Error handling message: {str(e)}")
 
@@ -147,24 +170,24 @@ class MessageSubscriber:
         try:
             envelope = message.envelope
             logger.info(f"Handling incoming request for agent: {envelope.to_agent}, path: {envelope.http_path}")
-            
+
             # Import here to avoid circular imports
             from ..main import agent_registry, message_publisher
-            
+
             if not agent_registry or not message_publisher:
                 logger.error("Agent registry or message publisher not available")
                 return
-            
+
             # Find the agent info
             agent_info = await agent_registry.get_agent(envelope.to_agent)
             if not agent_info or not agent_info.fqdn:
                 logger.error(f"Agent not found or no FQDN: {envelope.to_agent}")
                 return
-            
+
             # Make HTTP request to the local agent
             import aiohttp
             url = f"http://{agent_info.fqdn}{envelope.http_path}"
-            
+
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.request(
@@ -175,21 +198,22 @@ class MessageSubscriber:
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as response:
                         response_data = await response.json()
-                        
+
                         logger.info(f"Got response from local agent: {response.status}")
-                        
+
                         # Send response back via Service Bus
                         response_payload = json.dumps(response_data).encode('utf-8')
-                        
+
                         # We need to get the current proxy ID to set as fromProxy
                         from ..main import config
                         current_proxy_id = config.id if config else "unknown-proxy"
-                        
+
                         # Create a ServiceBusMessage with fromProxy property
-                        from .models import ServiceBusMessage, ServiceBusMessageType
-                        from uuid import uuid4
                         from datetime import datetime
-                        
+                        from uuid import uuid4
+
+                        from .models import ServiceBusMessage, ServiceBusMessageType
+
                         response_message = ServiceBusMessage(
                             message_id=str(uuid4()),
                             correlation_id=envelope.correlation_id,
@@ -199,23 +223,23 @@ class MessageSubscriber:
                             created_at=datetime.utcnow(),
                             properties={"fromProxy": current_proxy_id}
                         )
-                        
+
                         success = await message_publisher.client.send_message(
                             topic_name=f"a2a.{envelope.group}.responses",
                             message=response_message,
                             session_id=envelope.correlation_id
                         )
-                        
+
                         if success:
                             logger.info(f"Response sent via Service Bus, correlation_id: {envelope.correlation_id}")
                         else:
                             logger.error(f"Failed to send response via Service Bus, correlation_id: {envelope.correlation_id}")
-                            
+
             except aiohttp.ClientError as e:
                 logger.error(f"HTTP request to agent failed: {str(e)}")
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse agent response as JSON: {str(e)}")
-                
+
         except Exception as e:
             logger.error(f"Error handling incoming request: {str(e)}")
 
