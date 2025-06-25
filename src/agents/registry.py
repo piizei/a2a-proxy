@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Any
 from types import TracebackType
 
+import asyncio
+import httpx
+
 from ..config.loader import ConfigLoader
 from ..core.exceptions import ConfigurationError
 from ..core.interfaces import IAgentRegistry
@@ -20,6 +23,10 @@ class AgentRegistry(IAgentRegistry):
     ) -> None:
         self._agents: dict[str, AgentInfo] = agents or {}
         self._config_dir = config_dir
+        self._http_client: httpx.AsyncClient | None = None
+        self._health_cache: dict[str, str] = {}
+        self._last_health_check: int = 0
+        self._health_cache_ttl: int = 60
 
     async def __aenter__(self) -> "AgentRegistry":
         """Async context manager entry."""
@@ -32,7 +39,14 @@ class AgentRegistry(IAgentRegistry):
         exc_tb: TracebackType | None
     ) -> None:
         """Async context manager exit."""
-        pass
+        if self._http_client:
+            await self._http_client.aclose()
+            self._http_client = None
+
+    async def _ensure_http_client(self) -> None:
+        """Initialize the HTTP client if needed."""
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient()
 
     async def get_agent(self, agent_id: str) -> AgentInfo | None:
         """Get agent information by ID."""
@@ -51,31 +65,6 @@ class AgentRegistry(IAgentRegistry):
         except Exception as e:
             raise ConfigurationError(f"Failed to refresh agent registry: {e}") from e
 
-    async def get_health_status(self) -> dict[str, str]:
-        """Get health status of all agents."""
-        # Health status should be checked via the message router, not directly
-        # For now, return a simple status
-        return {agent_id: "unknown" for agent_id in self._agents}
-
-    def get_all_agents(self) -> dict[str, AgentInfo]:
-        """Get all agents in the registry."""
-        return self._agents.copy()
-
-    def add_agent(self, agent_info: AgentInfo) -> None:
-        """Add an agent to the registry."""
-        self._agents[agent_info.id] = agent_info
-
-    def remove_agent(self, agent_id: str) -> None:
-        """Remove an agent from the registry."""
-        self._agents.pop(agent_id, None)
-
-    def get_agent_count(self) -> int:
-        """Get total number of agents."""
-        return len(self._agents)
-
-    def get_groups(self) -> list[str]:
-        """Get list of all groups."""
-        return list({agent.group for agent in self._agents.values()})
     async def get_health_status(self) -> dict[str, str]:
         """Get health status of all agents."""
         import time
