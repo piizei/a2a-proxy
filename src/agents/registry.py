@@ -8,6 +8,9 @@ from typing import Any
 
 import httpx
 
+import asyncio
+import httpx
+
 from ..config.loader import ConfigLoader
 from ..core.exceptions import ConfigurationError
 from ..core.interfaces import IAgentRegistry
@@ -25,6 +28,7 @@ class AgentRegistry(IAgentRegistry):
         self._health_cache_ttl = 30  # seconds
         self._last_health_check = 0.0
 
+
     async def __aenter__(self) -> AgentRegistry:
         self._http_client = httpx.AsyncClient(timeout=10.0)
         return self
@@ -33,6 +37,7 @@ class AgentRegistry(IAgentRegistry):
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
+
 
     async def get_agent(self, agent_id: str) -> AgentInfo | None:
         return self._agents.get(agent_id)
@@ -48,6 +53,7 @@ class AgentRegistry(IAgentRegistry):
             raise ConfigurationError(f"Failed to refresh agent registry: {exc}") from exc
 
     async def get_health_status(self) -> dict[str, str]:
+
         import time
 
         now = time.time()
