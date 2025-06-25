@@ -2,9 +2,9 @@
 
 Currently it is expected user to create topics manually.
 The topics should follow structure:
-a2a.<group>.req    - For request messages
-a2a.<group>.resp   - For response messages  
-a2a.<group>.dlq    - For dead letter messages
+a2a.<group>.requests    - For request messages
+a2a.<group>.responses   - For response messages
+a2a.<group>.deadletter  - For dead letter messages
 
 However its too complicated, the coordinator should automatically create or update these topics when it starts.
 
