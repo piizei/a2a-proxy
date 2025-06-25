@@ -81,3 +81,4 @@ class ProxyConfigModel(BaseModel):
     monitoring: dict[str, Any] = Field(default_factory=dict)
     sessions: SessionConfig | None = Field(default=None, description="Session management configuration")
     agent_groups: list[TopicGroupConfig] = Field(default_factory=list, alias="agentGroups")
+    agent_registry: AgentRegistryConfig | None = Field(default=None, alias="agentRegistry")

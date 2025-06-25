@@ -41,3 +41,36 @@ sessions:
   default_ttl: 3600  # 1 hour
   cleanup_interval: 300  # 5 minutes
   max_sessions: 10000
+
+# Agent registry - local agents with FQDN for direct access
+# Todo: enable auto-discovery of agents via Service Bus topics
+agentRegistry:
+  version: "1.0"
+  lastUpdated: "2024-12-19T10:00:00Z"
+  groups:
+    blog-agents:
+      agents:
+        - id: "writer"
+          fqdn: "localhost:8001"  # Local FQDN for direct access
+          proxyId: "proxy-follower"
+          healthEndpoint: "/health"
+          agentCardEndpoint: "/.well-known/agent.json"
+          capabilities:
+            - "text-generation"
+            - "blog-writing"
+          a2aCapabilities:
+            streaming: true
+            stateTransitionHistory: false
+        
+        - id: "critic"
+          fqdn: "localhost:8002"  # Local FQDN for direct access
+          proxyId: "proxy-follower"
+          healthEndpoint: "/health"
+          agentCardEndpoint: "/.well-known/agent.json"
+          capabilities:
+            - "text-analysis"
+            - "blog-review"
+          a2aCapabilities:
+            streaming: true
+            stateTransitionHistory: false
+

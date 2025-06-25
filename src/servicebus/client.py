@@ -18,6 +18,7 @@ from .models import (
     MessageHandler,
     ServiceBusConfig,
     ServiceBusMessage,
+    ServiceBusMessageType,
     ServiceBusSubscription,
 )
 
@@ -213,21 +214,36 @@ class AzureServiceBusClient(IServiceBusClient):
             time_to_live=timedelta(seconds=self.config.default_message_ttl)
         )
 
-        # Add custom properties
-        if azure_message.application_properties is not None:
-            # Set basic properties
-            azure_message.application_properties["message_type"] = message.message_type.value
-            azure_message.application_properties["to_agent"] = message.envelope.to_agent
-            azure_message.application_properties["from_agent"] = message.envelope.from_agent
-            azure_message.application_properties["group"] = message.envelope.group
-            azure_message.application_properties["is_stream"] = str(message.envelope.is_stream)
-            
-            # Add additional properties individually to ensure type compatibility
-            for key, value in message.properties.items():
-                if isinstance(value, str | int | float | bool):
-                    azure_message.application_properties[key] = value
-                else:
-                    azure_message.application_properties[key] = str(value)
+        # Initialize application_properties if it's None
+        if azure_message.application_properties is None:
+            azure_message.application_properties = {}
+
+        # Set basic properties
+        azure_message.application_properties["messageType"] = message.message_type.value
+        azure_message.application_properties["message_type"] = message.message_type.value  # Keep both for compatibility
+        azure_message.application_properties["toAgent"] = message.envelope.to_agent
+        azure_message.application_properties["fromAgent"] = message.envelope.from_agent
+        azure_message.application_properties["to_agent"] = message.envelope.to_agent  # Keep both for compatibility
+        azure_message.application_properties["from_agent"] = message.envelope.from_agent  # Keep both for compatibility
+        azure_message.application_properties["group"] = message.envelope.group
+        
+        # Set proxy routing properties for response correlation
+        if message.message_type == ServiceBusMessageType.RESPONSE:
+            # For responses, toProxy should be the proxy that originally sent the request
+            azure_message.application_properties["toProxy"] = message.envelope.proxy_id
+            # Check if fromProxy is provided in message properties
+            if "fromProxy" in message.properties:
+                azure_message.application_properties["fromProxy"] = message.properties["fromProxy"]
+        else:
+            # For requests, fromProxy is the current proxy
+            azure_message.application_properties["fromProxy"] = message.envelope.proxy_id
+        
+        # Add additional properties individually to ensure type compatibility
+        for key, value in message.properties.items():
+            if isinstance(value, str | int | float | bool):
+                azure_message.application_properties[key] = value
+            else:
+                azure_message.application_properties[key] = str(value)
 
         return azure_message
 
@@ -249,18 +265,12 @@ class AzureServiceBusClient(IServiceBusClient):
             # Store handler
             self._message_handlers[subscription.name] = message_handler
 
-            # Create subscription receiver
-            receiver = self._client.get_subscription_receiver(
-                topic_name=subscription.topic_name,
-                subscription_name=subscription.name,
-                max_wait_time=self.config.receive_timeout
-            )
+            # Create subscription receiver will be handled by the restart wrapper
+            logger.info(f"Creating subscription for {subscription.name} on topic {subscription.topic_name}")
 
-            self._subscriptions[subscription.name] = receiver
-
-            # Start message processing task
+            # Start message processing task with restart capability
             task = asyncio.create_task(
-                self._process_subscription_messages(subscription.name, receiver)
+                self._process_subscription_with_restart(subscription.name, subscription.topic_name)
             )
             self._subscriptions[f"{subscription.name}_task"] = task
 
@@ -272,14 +282,77 @@ class AzureServiceBusClient(IServiceBusClient):
             logger.error(f"Failed to create subscription: {subscription.name}, error: {str(e)}")
             return False
 
+    async def _process_subscription_with_restart(self, subscription_name: str, topic_name: str) -> None:
+        """Process messages from a subscription with automatic restart on failure."""
+        restart_count = 0
+        max_restarts = 5
+        base_retry_delay = 5  # seconds
+        
+        while self._running and restart_count < max_restarts:
+            try:
+                logger.info(f"Starting/restarting message processing for subscription: {subscription_name} (attempt {restart_count + 1})")
+                
+                # Ensure we're connected
+                await self._ensure_connected()
+                
+                if not self._client:
+                    logger.error(f"No Service Bus client available for subscription {subscription_name}")
+                    break
+                
+                # Create new receiver (no max_wait_time to avoid timeout-based exits)
+                receiver = self._client.get_subscription_receiver(
+                    topic_name=topic_name,
+                    subscription_name=subscription_name
+                )
+                
+                # Update the stored receiver
+                self._subscriptions[subscription_name] = receiver
+                
+                # Process messages
+                await self._process_subscription_messages(subscription_name, receiver)
+                
+                # If we get here without exception, the loop ended normally
+                if self._running:
+                    # If we're still supposed to be running, this might be due to no messages
+                    # Wait a bit and restart to continue listening
+                    logger.info(f"Message processing ended naturally for subscription: {subscription_name}, restarting in 5 seconds...")
+                    await asyncio.sleep(5)
+                    continue
+                else:
+                    # Shutdown was requested
+                    logger.info(f"Message processing ended normally for subscription: {subscription_name} (shutdown requested)")
+                    break
+                
+            except Exception as e:
+                restart_count += 1
+                
+                # Log the error
+                if "current_link_credit" in str(e) or "NoneType" in str(e):
+                    logger.warning(f"Service Bus connection issue for subscription {subscription_name} (attempt {restart_count}): {str(e)}")
+                else:
+                    logger.error(f"Subscription processing error for {subscription_name} (attempt {restart_count}): {str(e)}")
+                
+                # Check if we should retry
+                if restart_count < max_restarts and self._running:
+                    retry_delay = base_retry_delay * (2 ** (restart_count - 1))  # Exponential backoff
+                    logger.info(f"Will retry subscription {subscription_name} in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(f"Max restart attempts reached for subscription {subscription_name}, giving up")
+                    break
+        
+        logger.info(f"Stopped processing messages for subscription: {subscription_name}")
+
     async def _process_subscription_messages(self, subscription_name: str, receiver: Any) -> None:
         """Process messages from a subscription."""
         logger.info(f"Started processing messages for subscription: {subscription_name}")
 
         try:
             async with receiver:
+                # Use asyncio.wait_for to add timeout to the message iteration
                 async for message in receiver:
                     if not self._running:
+                        logger.info(f"Stopping message processing for subscription: {subscription_name} (shutdown requested)")
                         break
 
                     try:
@@ -298,13 +371,22 @@ class AzureServiceBusClient(IServiceBusClient):
                     except Exception as e:
                         logger.error(f"Error processing message for subscription {subscription_name}: {str(e)}")
                         # Abandon message on error
-                        await receiver.abandon_message(message)
+                        try:
+                            await receiver.abandon_message(message)
+                        except Exception as abandon_error:
+                            logger.error(f"Failed to abandon message: {abandon_error}")
                         self._stats.record_message_failed()
+                        
+                # If we reach here, the async iteration ended without explicit break
+                logger.info(f"Message iteration ended for subscription: {subscription_name}")
 
         except Exception as e:
-            logger.error(f"Subscription processing error for {subscription_name}: {str(e)}")
-        finally:
-            logger.info(f"Stopped processing messages for subscription: {subscription_name}")
+            # Re-raise the exception so the restart wrapper can handle it
+            if "current_link_credit" in str(e) or "NoneType" in str(e):
+                logger.debug(f"Service Bus connection issue for subscription {subscription_name}: {str(e)}")
+            else:
+                logger.error(f"Subscription processing error for {subscription_name}: {str(e)}")
+            raise
 
     async def _convert_azure_message(self, azure_message: Any) -> ServiceBusMessage:
         """Convert Azure Service Bus message to our message format."""
@@ -365,7 +447,10 @@ class AzureServiceBusClient(IServiceBusClient):
         # Close receiver
         receiver = self._subscriptions.pop(subscription_name, None)
         if receiver:
-            await receiver.close()
+            try:
+                await receiver.close()
+            except Exception as e:
+                logger.warning(f"Error closing receiver for {subscription_name}: {str(e)}")
 
         # Remove handler
         self._message_handlers.pop(subscription_name, None)
@@ -382,6 +467,60 @@ class AzureServiceBusClient(IServiceBusClient):
             "message_count": 0,  # Would need Service Bus management API for this
             "dead_letter_count": 0  # Would need Service Bus management API for this
         }
+
+    async def get_subscription_health(self) -> dict[str, dict[str, Any]]:
+        """Get health status of all subscriptions."""
+        health = {}
+        
+        for subscription_name, handler in self._message_handlers.items():
+            task_key = f"{subscription_name}_task"
+            task = self._subscriptions.get(task_key)
+            receiver = self._subscriptions.get(subscription_name)
+            
+            health[subscription_name] = {
+                "has_handler": handler is not None,
+                "has_task": task is not None,
+                "task_done": task.done() if task else True,
+                "task_cancelled": task.cancelled() if task else False,
+                "has_receiver": receiver is not None,
+                "running": self._running
+            }
+            
+            if task and task.done() and not task.cancelled():
+                try:
+                    # Check if task completed with exception
+                    task.exception()
+                except Exception as e:
+                    health[subscription_name]["task_exception"] = str(e)
+        
+        return health
+
+    async def restart_failed_subscriptions(self) -> list[str]:
+        """Restart any failed subscriptions. Returns list of restarted subscription names."""
+        restarted = []
+        health = await self.get_subscription_health()
+        
+        for subscription_name, status in health.items():
+            if status["has_handler"] and (status["task_done"] or not status["has_task"]):
+                logger.info(f"Restarting failed subscription: {subscription_name}")
+                
+                # Find the topic name from existing subscriptions or reconstruct it
+                # This is a fallback - ideally we should store the topic name
+                topic_name = f"a2a.{subscription_name.split('-')[2]}.requests"  # Simplified reconstruction
+                
+                # Clean up old task if it exists
+                old_task = self._subscriptions.pop(f"{subscription_name}_task", None)
+                if old_task and not old_task.done():
+                    old_task.cancel()
+                
+                # Start new task
+                task = asyncio.create_task(
+                    self._process_subscription_with_restart(subscription_name, topic_name)
+                )
+                self._subscriptions[f"{subscription_name}_task"] = task
+                restarted.append(subscription_name)
+        
+        return restarted
 
     @property
     def stats(self) -> ConnectionStats:

@@ -2,6 +2,63 @@
 
 A Python-based proxy service that enables A2A (Agent-to-Agent) protocol communication over Azure Service Bus. The proxy transparently routes JSON-RPC requests and HTTP/2 Server-Sent Events (SSE) between distributed AI agents while maintaining protocol semantics.
 
+## Configuration Architecture
+
+The A2A proxy uses a distributed configuration approach where each proxy contains:
+
+### 1. Proxy Identity (`proxy` section)
+- Unique proxy ID and role (coordinator/follower)
+- Network port and basic settings
+
+### 2. Service Bus Configuration (`servicebus` section)
+- Azure Service Bus connection details
+- Topic names and message settings
+- Retry and timeout configurations
+
+### 3. Agent Registry (`agent_registry` section)
+- **Complete network topology** - must be identical across all proxies
+- Defines all agents in the network with their connection details
+- Used for routing decisions and agent discovery
+
+### 4. Local Agent Hosting (`hosted_agents` section)
+- Defines which agents this specific proxy hosts locally
+- Maps to actual agent processes running on this machine
+
+### 5. Message Subscriptions (`subscriptions` section)
+- Defines which Service Bus messages this proxy should receive
+- Filters determine message routing (e.g., `toAgent = 'writer'`)
+
+### 6. Topic Management (`agent_groups` section - coordinator only)
+- Defines agent groups for Service Bus topic creation
+- Only required on coordinator proxy
+- Topics are automatically created with pattern: `a2a.{group_name}.{requests|responses|deadletter}`
+- Each group gets its own set of topics for message isolation
+
+### Coordinator vs Follower Roles
+
+**Coordinator Proxy:**
+- Creates and manages Service Bus topics and subscriptions
+- Has `agent_groups` configuration for topic management
+- Topics created automatically: `a2a.{group}.requests`, `a2a.{group}.responses`, `a2a.{group}.deadletter`
+- Typically the first proxy started in the network
+
+**Follower Proxy:**
+- Connects to existing Service Bus topics created by coordinator
+- No topic management responsibilities
+- Can be started after coordinator is running
+
+### Topic Structure
+
+The proxy automatically creates Service Bus topics based on agent groups:
+
+| Group Name | Topic Created | Purpose |
+|------------|---------------|---------|
+| `blog-agents` | `a2a.blog-agents.requests` | Request messages between agents |
+| `blog-agents` | `a2a.blog-agents.responses` | Response messages from agents |
+| `blog-agents` | `a2a.blog-agents.deadletter` | Failed/undeliverable messages |
+
+Each topic has subscriptions created for routing messages to the appropriate proxy instances.
+
 ## Quick Start: Running Two Proxy Instances
 
 This guide shows how to run two proxy instances with different agent configurations - one hosting a "writer" agent (leader) and another hosting a "critic" agent (follower).
@@ -31,6 +88,15 @@ Create a Service Bus namespace in Azure and note the connection string. You'll n
 
 ### Step 3: Create Configuration Files
 
+The proxy configuration includes both Service Bus settings and agent registry information. Each proxy defines which agents it hosts and their connection details.
+
+**Important Notes:**
+- The `agent_registry` section contains the complete network topology and must be identical across all proxies
+- Only the coordinator proxy needs the `agent_groups` section for Service Bus topic management
+- Topics are automatically created with naming pattern: `a2a.{group_name}.{requests|responses|deadletter}`
+- Each proxy's `hosted_agents` section defines which agents it actually hosts locally
+- The `subscriptions` section determines which messages the proxy will receive from Service Bus
+
 #### Writer Proxy Configuration (Leader)
 
 Create `config/proxy-writer.yaml`:
@@ -43,16 +109,49 @@ proxy:
 
 servicebus:
   namespace: "a2a-dev"
-  connectionString: "Endpoint=sb://a2a-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=YOUR_KEY_HERE"
-  requestTopic: "requests"
-  responseTopic: "responses"
-  notificationTopic: "notifications"
-  defaultMessageTtl: 3600
-  maxRetryCount: 3
-  receiveTimeout: 30
+  connection_string: "Endpoint=sb://a2a-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=YOUR_KEY_HERE"
+  default_message_ttl: 300000  # 5 minutes in milliseconds
+  max_retry_count: 3
+  receive_timeout: 30  # seconds
+
+# Agent groups for topic management (coordinator only)
+# Topics will be created as: a2a.{group_name}.{requests|responses|deadletter}
+agent_groups:
+  - name: "blog-agents"
+    description: "Blog writing and editing agents"
+    max_message_size_mb: 2
+    message_ttl_seconds: 3600
+    enable_partitioning: true
+    duplicate_detection_window_minutes: 10
+
+# Agent registry - defines all agents in the network
+agent_registry:
+  version: "1.0"
+  last_updated: "2024-01-01T00:00:00Z"
+  groups:
+    blog-agents:
+      agents:
+        - id: writer
+          fqdn: localhost:8002
+          proxy_id: proxy-writer
+          health_endpoint: /health
+          agent_card_endpoint: /.well-known/agent.json
+          capabilities: ["text-generation", "blog-writing"]
+          a2a_capabilities:
+            streaming: true
+            state_transition_history: false
+        - id: critic
+          fqdn: localhost:8001
+          proxy_id: proxy-critic
+          health_endpoint: /health
+          agent_card_endpoint: /.well-known/agent.json
+          capabilities: ["text-analysis", "blog-review"]
+          a2a_capabilities:
+            streaming: true
+            state_transition_history: false
 
 # This proxy hosts the writer agent
-hostedAgents:
+hosted_agents:
   blog-agents:
     - writer
 
@@ -62,15 +161,15 @@ subscriptions:
     filter: "toAgent = 'writer'"
 
 limits:
-  maxConcurrentStreams: 200
-  maxMessageSize: 1048576
-  streamBufferSize: 10485760
-  queueDepthThreshold: 5000
+  max_concurrent_streams: 200
+  max_message_size: 1048576
+  stream_buffer_size: 10485760
+  queue_depth_threshold: 5000
 
 monitoring:
-  metricsPort: 9090
-  healthPort: 8081
-  logLevel: "info"
+  metrics_port: 9090
+  health_port: 8081
+  log_level: "info"
 
 sessions:
   store_type: "file"
@@ -93,16 +192,39 @@ proxy:
 
 servicebus:
   namespace: "a2a-dev"
-  connectionString: "Endpoint=sb://a2a-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=YOUR_KEY_HERE"
-  requestTopic: "requests"
-  responseTopic: "responses"
-  notificationTopic: "notifications"
-  defaultMessageTtl: 3600
-  maxRetryCount: 3
-  receiveTimeout: 30
+  connection_string: "Endpoint=sb://a2a-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=YOUR_KEY_HERE"
+  default_message_ttl: 300000  # 5 minutes in milliseconds
+  max_retry_count: 3
+  receive_timeout: 30  # seconds
+
+# Agent registry - same as coordinator but follower doesn't manage topics
+agent_registry:
+  version: "1.0"
+  last_updated: "2024-01-01T00:00:00Z"
+  groups:
+    blog-agents:
+      agents:
+        - id: writer
+          fqdn: localhost:8002
+          proxy_id: proxy-writer
+          health_endpoint: /health
+          agent_card_endpoint: /.well-known/agent.json
+          capabilities: ["text-generation", "blog-writing"]
+          a2a_capabilities:
+            streaming: true
+            state_transition_history: false
+        - id: critic
+          fqdn: localhost:8001
+          proxy_id: proxy-critic
+          health_endpoint: /health
+          agent_card_endpoint: /.well-known/agent.json
+          capabilities: ["text-analysis", "blog-review"]
+          a2a_capabilities:
+            streaming: true
+            state_transition_history: false
 
 # This proxy hosts the critic agent
-hostedAgents:
+hosted_agents:
   blog-agents:
     - critic
 
@@ -112,15 +234,15 @@ subscriptions:
     filter: "toAgent = 'critic'"
 
 limits:
-  maxConcurrentStreams: 200
-  maxMessageSize: 1048576
-  streamBufferSize: 10485760
-  queueDepthThreshold: 5000
+  max_concurrent_streams: 200
+  max_message_size: 1048576
+  stream_buffer_size: 10485760
+  queue_depth_threshold: 5000
 
 monitoring:
-  metricsPort: 9091  # Different port from writer
-  healthPort: 8082   # Different port from writer
-  logLevel: "info"
+  metrics_port: 9091  # Different port from writer
+  health_port: 8082   # Different port from writer
+  log_level: "info"
 
 sessions:
   store_type: "file"
@@ -129,39 +251,6 @@ sessions:
   default_ttl: 3600
   cleanup_interval: 300
   max_sessions: 10000
-```
-
-#### Agent Registry Configuration
-
-Update `config/agent-registry.yaml`:
-
-```yaml
-version: "1.0"
-lastUpdated: "2024-01-01T00:00:00Z"
-
-groups:
-  blog-agents:
-    agents:
-      - id: writer
-        fqdn: localhost:8002
-        proxyId: proxy-writer
-        healthEndpoint: /health
-        agentCardEndpoint: /.well-known/agent.json
-        capabilities: ["message/send", "message/stream"]
-        a2aCapabilities:
-          streaming: true
-          pushNotifications: false
-          stateTransitionHistory: true
-      - id: critic
-        fqdn: localhost:8001
-        proxyId: proxy-critic
-        healthEndpoint: /health
-        agentCardEndpoint: /.well-known/agent.json
-        capabilities: ["message/send", "message/stream"]
-        a2aCapabilities:
-          streaming: true
-          pushNotifications: true
-          stateTransitionHistory: false
 ```
 
 ### Step 4: Start Mock Agents
@@ -182,20 +271,21 @@ python mock_agent.py --port 8001 --name critic
 
 ```bash
 # Terminal 3 - Writer proxy
-CONFIG_PATH=config/proxy-writer.yaml uv run python -m src.main
+uv run python start_proxy.py config/proxy-writer.yaml
 ```
 
 The writer proxy will:
 - Start as coordinator (leader role)
 - Listen on port 8080
 - Host the "writer" agent
+- Create Service Bus topics and subscriptions for the blog-agents group
 - Subscribe to messages targeting the writer
 
 #### Start Critic Proxy (Follower)
 
 ```bash
 # Terminal 4 - Critic proxy
-CONFIG_PATH=config/proxy-critic.yaml uv run python -m src.main
+uv run python start_proxy.py config/proxy-critic.yaml
 ```
 
 The critic proxy will:
@@ -332,6 +422,8 @@ graph TB
 | **Agent FQDN** | `localhost:8002` | `localhost:8001` |
 | **Session Directory** | `./data/sessions-writer` | `./data/sessions-critic` |
 | **Subscription Filter** | `toAgent = 'writer'` | `toAgent = 'critic'` |
+| **Agent Groups** | Defines groups for topic management | Not needed (follower role) |
+| **Agent Registry** | Contains full network topology | Same as coordinator |
 
 ### Message Flow Example
 
@@ -361,8 +453,9 @@ graph TB
    - Check that no other services use the same ports
 
 4. **Message Routing**
-   - Verify agent registry configuration
+   - Verify agent registry configuration in proxy config files
    - Check subscription filters in proxy configs
+   - Ensure agent_registry section is identical across all proxies
 
 #### Debug Commands
 
@@ -507,16 +600,22 @@ def validate_config(config_path):
             config = yaml.safe_load(f)
         
         # Check required sections
-        required_sections = ['proxy', 'servicebus', 'hostedAgents']
+        required_sections = ['proxy', 'servicebus', 'hosted_agents', 'agent_registry']
         for section in required_sections:
             if section not in config:
                 print(f"✗ Missing required section: {section}")
                 return False
         
         # Check Service Bus connection string
-        if 'YOUR_KEY_HERE' in config['servicebus'].get('connectionString', ''):
+        if 'YOUR_KEY_HERE' in config['servicebus'].get('connection_string', ''):
             print(f"✗ Please update Service Bus connection string in {config_path}")
             return False
+        
+        # Check coordinator-specific requirements
+        if config['proxy']['role'] == 'coordinator':
+            if 'agent_groups' not in config or not config['agent_groups']:
+                print(f"✗ Coordinator proxy missing agent_groups configuration in {config_path}")
+                return False
         
         print(f"✓ Configuration {config_path} is valid")
         return True

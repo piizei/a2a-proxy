@@ -486,6 +486,51 @@ class TopicManager:
         
         return results
     
+    async def create_system_topics(self) -> Dict[str, TopicOperationResult]:
+        """Create system-wide topics like notifications.
+        
+        Returns:
+            Dictionary mapping topic name to operation result
+        """
+        if not self._admin_client:
+            raise A2AProxyError("Topic manager not connected")
+        
+        logger.info("Creating system topics")
+        
+        # Define system topics to create
+        system_topics = ["a2a-notifications"]
+        results = {}
+        
+        for topic_name in system_topics:
+            try:
+                # Create a minimal config for system topics
+                system_config = TopicGroupConfig(
+                    name="system",
+                    description="System topics",
+                    maxMessageSizeMB=1,
+                    messageTTLSeconds=3600,
+                    enablePartitioning=False,
+                    duplicateDetectionWindowMinutes=10
+                )
+                
+                result = await self._create_single_topic(topic_name, system_config)
+                results[topic_name] = result
+                
+                if result.status in [TopicStatus.CREATED, TopicStatus.EXISTS]:
+                    logger.info(f"System topic ensured: {topic_name}")
+                else:
+                    logger.warning(f"Failed to create system topic: {topic_name}")
+                    
+            except Exception as e:
+                logger.error(f"Error creating system topic {topic_name}: {str(e)}")
+                results[topic_name] = TopicOperationResult(
+                    topic_name=topic_name,
+                    status=TopicStatus.FAILED,
+                    error=str(e)
+                )
+        
+        return results
+    
     def close(self) -> None:
         """Close the topic manager and clean up resources."""
         self._disconnect()

@@ -210,17 +210,30 @@ class MessageRouter:
             # Serialize payload
             payload_bytes = json.dumps(payload or {}).encode('utf-8')
 
-            # Publish to Service Bus
+            # Publish to Service Bus (use correlation_id as session_id for ordering)
             success = await self.message_publisher.publish_request(
                 envelope=envelope,
-                payload=payload_bytes
+                payload=payload_bytes,
+                session_id=envelope.correlation_id
             )
 
             if success:
                 logger.info(f"Remote routing successful agent_id={agent_info.id}")
 
-                # For now, return acknowledgment
-                # TODO: Implement response waiting mechanism
+                # Create a pending request to wait for the response
+                from ..main import pending_request_manager
+                if pending_request_manager:
+                    await pending_request_manager.create_request(
+                        correlation_id=envelope.correlation_id,
+                        timeout_seconds=30,
+                        metadata={
+                            "agent_id": agent_info.id,
+                            "http_path": http_path,
+                            "http_method": http_method
+                        }
+                    )
+
+                # Return acknowledgment with correlation_id for response waiting
                 return {
                     "status": "routed",
                     "agent_id": agent_info.id,

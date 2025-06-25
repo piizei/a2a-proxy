@@ -48,14 +48,20 @@ class MessagePublisher(IMessagePublisher):
                 created_at=datetime.utcnow()
             )
 
+            # Use group-specific topic name according to proxy specification
+            topic_name = f"a2a.{envelope.group}.requests"
+            
+            # Use correlation_id as session_id if none provided (required for ordered delivery)
+            effective_session_id = session_id or envelope.correlation_id
+            
             success = await self.client.send_message(
-                topic_name=self.config.request_topic,
+                topic_name=topic_name,
                 message=message,
-                session_id=session_id
+                session_id=effective_session_id
             )
 
             if success:
-                logger.info(f"Request published to_agent={envelope.to_agent}, correlation_id={envelope.correlation_id}")
+                logger.info(f"Request published to_agent={envelope.to_agent}, group={envelope.group}, topic={topic_name}, correlation_id={envelope.correlation_id}")
             else:
                 logger.error(f"Failed to publish request to_agent={envelope.to_agent}, correlation_id={envelope.correlation_id}")
 
@@ -85,14 +91,20 @@ class MessagePublisher(IMessagePublisher):
                 created_at=datetime.utcnow()
             )
 
+            # Use group-specific topic name according to proxy specification
+            topic_name = f"a2a.{envelope.group}.responses"
+
+            # Use correlation_id as session_id if none provided (required for ordered delivery)
+            effective_session_id = session_id or correlation_id
+
             success = await self.client.send_message(
-                topic_name=self.config.response_topic,
+                topic_name=topic_name,
                 message=message,
-                session_id=session_id
+                session_id=effective_session_id
             )
 
             if success:
-                logger.info(f"Response published correlation_id={correlation_id}")
+                logger.info(f"Response published group={envelope.group}, topic={topic_name}, correlation_id={correlation_id}")
             else:
                 logger.error(f"Failed to publish response correlation_id={correlation_id}")
 
@@ -105,7 +117,8 @@ class MessagePublisher(IMessagePublisher):
     async def publish_notification(
         self,
         envelope: MessageEnvelope,
-        payload: bytes
+        payload: bytes,
+        session_id: str | None = None
     ) -> bool:
         """Publish a notification message."""
         logger.debug(f"Publishing notification correlation_id={envelope.correlation_id}")
@@ -120,9 +133,13 @@ class MessagePublisher(IMessagePublisher):
                 created_at=datetime.utcnow()
             )
 
+            # Use correlation_id as session_id if none provided (required for ordered delivery)
+            effective_session_id = session_id or envelope.correlation_id
+
             success = await self.client.send_message(
                 topic_name=self.config.notification_topic,
-                message=message
+                message=message,
+                session_id=effective_session_id
             )
 
             if success:

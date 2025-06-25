@@ -45,15 +45,17 @@ class ServiceBusMessage:
         self.retry_count += 1
 
 
-class ServiceBusSubscription(BaseModel):
+@dataclass
+class ServiceBusSubscription:
     """Service Bus subscription configuration."""
-
-    name: str = Field(..., description="Subscription name")
-    topic_name: str = Field(..., description="Topic to subscribe to")
-    filter_expression: str = Field(..., description="Message filter expression")
-    max_delivery_count: int = Field(default=5, description="Maximum delivery attempts")
-    auto_delete_on_idle: int = Field(default=3600, description="Auto-delete timeout in seconds")
-    enable_dead_lettering: bool = Field(default=True, description="Enable dead letter queue")
+    name: str
+    topic_name: str
+    filter_rule: str | None = None
+    max_delivery_count: int = 10
+    lock_duration: int = 60  # seconds
+    default_message_ttl: int = 3600  # seconds
+    dead_lettering_on_message_expiration: bool = True
+    enable_batched_operations: bool = True
 
 
 class ServiceBusConfig(BaseModel):
@@ -68,7 +70,7 @@ class ServiceBusConfig(BaseModel):
     max_retry_count: int = Field(default=3, description="Maximum retry attempts")
     retry_delay_seconds: int = Field(default=5, description="Delay between retries")
     batch_size: int = Field(default=10, description="Message batch size")
-    receive_timeout: int = Field(default=30, description="Message receive timeout in seconds")
+    receive_timeout: int = Field(default=10, description="Message receive timeout in seconds")
 
     def get_fully_qualified_namespace(self) -> str:
         """Get the fully qualified namespace for managed identity."""

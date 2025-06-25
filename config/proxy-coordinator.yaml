@@ -5,7 +5,7 @@ proxy:
 
 servicebus:
   namespace: "a2aproxy"
-  #connectionString: "Endpoint=sb://a2a-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=test-key"
+  # connectionString: "Endpoint=sb://a2aproxy.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=YOUR_ACTUAL_KEY_HERE"
   defaultMessageTtl: 3600  # 1 hour
   maxRetryCount: 3
   receiveTimeout: 30  # seconds
@@ -14,9 +14,14 @@ servicebus:
 # It only manages Service Bus topics and forwards requests
 hostedAgents: {}
 
-# No subscriptions needed since we don't host any agents
-# All message routing is handled through Service Bus topics
-subscriptions: []
+# Coordinator subscriptions - receives responses from agent groups it manages
+subscriptions:
+  - group: "blog-agents"
+    filter: "messageType = 'response' AND toProxy = 'proxy-1'"
+  - group: "research-agents" 
+    filter: "messageType = 'response' AND toProxy = 'proxy-1'"
+  - group: "notifications"
+    filter: "messageType = 'notification' AND (toProxy = 'proxy-1' OR toProxy IS NULL)"
 
 limits:
   maxConcurrentStreams: 200
@@ -50,3 +55,46 @@ agentGroups:
     messageTTLSeconds: 7200
     enablePartitioning: true
     duplicateDetectionWindowMinutes: 15
+
+# Agent registry - coordinator needs to know about all agents
+# Todo: enable auto-discovery of agents via Service Bus topics
+agentRegistry:
+  version: "1.0"
+  lastUpdated: "2024-12-19T10:00:00Z"
+  groups:
+    blog-agents:
+      agents:
+        - id: "writer"
+          proxyId: "proxy-follower"
+          healthEndpoint: "/health"
+          agentCardEndpoint: "/.well-known/agent.json"
+          capabilities:
+            - "text-generation"
+            - "blog-writing"
+          a2aCapabilities:
+            streaming: true
+            stateTransitionHistory: false
+        
+        - id: "critic"
+          proxyId: "proxy-follower"
+          healthEndpoint: "/health"
+          agentCardEndpoint: "/.well-known/agent.json"
+          capabilities:
+            - "text-analysis"
+            - "blog-review"
+          a2aCapabilities:
+            streaming: true
+            stateTransitionHistory: false
+
+    research-agents:
+      agents:
+        - id: "researcher"
+          proxyId: "proxy-3"
+          healthEndpoint: "/health"
+          agentCardEndpoint: "/.well-known/agent.json"
+          capabilities:
+            - "web-search"
+            - "data-analysis"
+          a2aCapabilities:
+            streaming: false
+            stateTransitionHistory: true

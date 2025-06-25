@@ -17,6 +17,7 @@ from .agents import AgentRegistry
 from .config import ConfigLoader
 from .core.exceptions import A2AProxyError, AgentNotFoundError
 from .core.models import ProxyConfig, ProxyRole
+from .core.pending_requests import PendingRequestManager
 from .routing.router import MessageRouter
 from .servicebus import MessagePublisher, MessageSubscriber
 from .servicebus.client import AzureServiceBusClient
@@ -64,6 +65,7 @@ servicebus_client: AzureServiceBusClient | None = None
 message_publisher: MessagePublisher | None = None
 message_subscriber: MessageSubscriber | None = None
 message_router: MessageRouter | None = None
+pending_request_manager: PendingRequestManager | None = None
 
 
 def get_config_file_path() -> tuple[str, str]:
@@ -121,7 +123,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                    proxy_id=config.id,
                    role=config.role.value)
 
-        agents = loader.load_agent_registry()
+        # Extract agent registry from the loaded config
+        agents = loader.extract_agent_registry_from_config(config)
 
         logger.info("Configuration loaded", proxy_id=config.id, role=config.role.value)
 
@@ -130,6 +133,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         await agent_registry.__aenter__()
 
         logger.info("Agent registry initialized", agent_count=agent_registry.get_agent_count())
+
+        # Initialize pending request manager for Service Bus correlation
+        global pending_request_manager
+        pending_request_manager = PendingRequestManager(cleanup_interval=60)
+        await pending_request_manager.start()
+        logger.info("Pending request manager initialized")
 
         # Initialize session manager
         session_config_dict = config.sessions or {}
@@ -195,6 +204,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                             if failed_groups:
                                 logger.warning(f"Failed to ensure topics for groups: {', '.join(failed_groups)}")
 
+                            # Create system topics (like a2a-notifications)
+                            logger.info("Creating system topics")
+                            system_results = await topic_manager.create_system_topics()
+                            
+                            from .servicebus.topic_manager import TopicStatus
+                            successful_system = [name for name, result in system_results.items() 
+                                               if result.status in [TopicStatus.CREATED, TopicStatus.EXISTS]]
+                            failed_system = [name for name, result in system_results.items() 
+                                           if result.status == TopicStatus.FAILED]
+                            
+                            if successful_system:
+                                logger.info(f"Successfully created system topics: {', '.join(successful_system)}")
+                            if failed_system:
+                                logger.warning(f"Failed to create system topics: {', '.join(failed_system)}")
+
                     except Exception as e:
                         logger.error(f"Topic management failed: {str(e)}")
                         logger.warning("Continuing without topic management - topics may need to be created manually")
@@ -202,6 +226,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     logger.info("No agent groups configured for topic management")
                 else:
                     logger.info("Follower proxy - skipping topic management")
+
+                # Create subscriptions for this proxy
+                logger.info(f"Creating Service Bus subscriptions for proxy: {config.id}")
+                try:
+                    from .servicebus.subscription_manager import SubscriptionManager
+                    
+                    subscription_manager = SubscriptionManager(
+                        namespace=config.servicebus.namespace,
+                        connection_string=config.servicebus.connection_string
+                    )
+                    
+                    async with subscription_manager:
+                        sub_results = await subscription_manager.ensure_proxy_subscriptions(config)
+                        
+                        # Log results
+                        successful_subs = [name for name, success in sub_results.items() if success]
+                        failed_subs = [name for name, success in sub_results.items() if not success]
+                        
+                        if successful_subs:
+                            logger.info(f"Successfully created subscriptions: {', '.join(successful_subs)}")
+                        if failed_subs:
+                            logger.warning(f"Failed to create subscriptions: {', '.join(failed_subs)}")
+                    
+                    # Start message subscription handlers
+                    if message_subscriber and config.subscriptions:
+                        logger.info("Starting message subscription handlers")
+                        await message_subscriber.start_subscriptions(config.subscriptions)
+                        
+                except Exception as e:
+                    logger.error(f"Subscription management failed: {str(e)}")
+                    logger.warning("Continuing without subscription management - subscriptions may need to be created manually")
 
             except Exception as e:
                 logger.error("Failed to initialize Service Bus components", error=str(e))
@@ -241,6 +296,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 logger.info("Service Bus client stopped")
             except Exception as e:
                 logger.error("Error stopping Service Bus client", error=str(e))
+
+        # Stop pending request manager
+        if pending_request_manager:
+            await pending_request_manager.stop()
+            logger.info("Pending request manager stopped")
 
         # Stop session manager
         if 'session_manager' in globals() and session_manager:
@@ -387,10 +447,40 @@ async def get_agent_card_by_path(
         )
 
         # If the response indicates the request was routed to Service Bus, 
-        # we need to wait for the actual response (TODO: implement response waiting)
+        # wait for the actual response using the pending request manager
         if isinstance(response, dict) and response.get("status") == "routed":
-            # For now, return a placeholder
-            logger.warning(f"Agent card request routed to Service Bus, response waiting not yet implemented")
+            correlation_id = response.get("correlation_id")
+            if correlation_id and pending_request_manager:
+                try:
+                    logger.info(f"Waiting for Service Bus response for agent card request, correlation_id={correlation_id}")
+                    # Wait for the response with a timeout
+                    actual_response = await pending_request_manager.wait_for_response(correlation_id)
+                    
+                    # If we got a response, process it
+                    if isinstance(actual_response, dict):
+                        # Rewrite URL in the agent card to use proxy path
+                        if "url" in actual_response:
+                            base_url = str(request.base_url).rstrip('/')
+                            actual_response["url"] = f"{base_url}/agents/{agent_id}"
+                        return actual_response
+                    else:
+                        logger.warning(f"Unexpected response type from Service Bus: {type(actual_response)}")
+                        
+                except TimeoutError:
+                    logger.warning(f"Agent card request timed out, correlation_id={correlation_id}")
+                    raise HTTPException(
+                        status_code=504,
+                        detail=f"Agent card request timed out for agent {agent_id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error waiting for Service Bus response: {str(e)}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Error retrieving agent card for agent {agent_id}"
+                    )
+            
+            # If no correlation_id or pending_request_manager, fall back to placeholder
+            logger.warning(f"Agent card request routed to Service Bus but cannot wait for response (correlation_id={correlation_id}, pending_manager={pending_request_manager is not None})")
             return {
                 "name": f"Agent {agent_id}",
                 "description": f"Agent {agent_id} (remote)",
@@ -850,6 +940,67 @@ async def get_session_by_correlation_id(
         "expires_at": session_info.expires_at.isoformat() if session_info.expires_at else None,
         "metadata": session_info.metadata
     }
+
+
+@app.get("/admin/subscriptions")
+async def list_proxy_subscriptions() -> dict[str, Any]:
+    """List all Service Bus subscriptions for this proxy."""
+    proxy_config: ProxyConfig = await get_config()
+    
+    if not proxy_config.servicebus:
+        raise HTTPException(status_code=503, detail="Service Bus not configured")
+    
+    from .servicebus.subscription_manager import SubscriptionManager
+    subscription_manager = SubscriptionManager(
+        namespace=proxy_config.servicebus.namespace,
+        connection_string=proxy_config.servicebus.connection_string
+    )
+    
+    try:
+        async with subscription_manager:
+            subscriptions = await subscription_manager.list_proxy_subscriptions(proxy_config.id)
+        
+        return {
+            "proxy_id": proxy_config.id,
+            "subscriptions": subscriptions,
+            "total": len(subscriptions),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to list subscriptions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list subscriptions: {str(e)}") from e
+
+@app.post("/admin/subscriptions/recreate")
+async def recreate_proxy_subscriptions() -> dict[str, Any]:
+    """Recreate all subscriptions for this proxy."""
+    proxy_config: ProxyConfig = await get_config()
+    
+    if not proxy_config.servicebus:
+        raise HTTPException(status_code=503, detail="Service Bus not configured")
+    
+    from .servicebus.subscription_manager import SubscriptionManager
+    subscription_manager = SubscriptionManager(
+        namespace=proxy_config.servicebus.namespace,
+        connection_string=proxy_config.servicebus.connection_string
+    )
+    
+    try:
+        async with subscription_manager:
+            # Delete existing subscriptions
+            delete_results = await subscription_manager.delete_proxy_subscriptions(proxy_config.id)
+            
+            # Create new subscriptions
+            create_results = await subscription_manager.ensure_proxy_subscriptions(proxy_config)
+        
+        return {
+            "proxy_id": proxy_config.id,
+            "deleted": delete_results,
+            "created": create_results,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to recreate subscriptions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to recreate subscriptions: {str(e)}") from e
 
 
 if __name__ == "__main__":

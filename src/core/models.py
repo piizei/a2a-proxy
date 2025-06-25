@@ -113,6 +113,7 @@ class ProxyConfig:
     sessions: dict[str, Any] | None = field(default=None)  # Session configuration
     servicebus: Optional['ServiceBusConfig'] = field(default=None)  # Service Bus configuration
     agent_groups: list['TopicGroupConfig'] = field(default_factory=list)  # Agent groups for topic management
+    agent_registry: Optional[dict[str, Any]] = field(default=None)  # Agent registry data
 
     def __post_init__(self) -> None:
         """Validate proxy configuration after initialization."""

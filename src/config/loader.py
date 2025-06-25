@@ -41,7 +41,8 @@ class ConfigLoader:
                 monitoring=model.monitoring,
                 sessions=data.get("sessions"),  # Pass raw sessions config
                 servicebus=model.servicebus,  # Add Service Bus config
-                agent_groups=model.agent_groups  # Add agent groups
+                agent_groups=model.agent_groups,  # Add agent groups
+                agent_registry=data.get("agentRegistry")  # Add agent registry from raw data
             )
         except Exception as e:
             raise ConfigurationError(f"Failed to load proxy config: {e}") from e
@@ -76,3 +77,42 @@ class ConfigLoader:
             return agents
         except Exception as e:
             raise ConfigurationError(f"Failed to load agent registry: {e}") from e
+
+    def extract_agent_registry_from_config(self, config: ProxyConfig) -> dict[str, AgentInfo]:
+        """Extract agent registry from proxy configuration.
+
+        Args:
+            config: Proxy configuration containing agent registry data
+
+        Returns:
+            Dictionary mapping agent IDs to AgentInfo objects
+        """
+        agents = {}
+
+        if not config.agent_registry:
+            return agents
+
+        try:
+            # Parse the agent registry using the AgentRegistryConfig model
+            registry_model = AgentRegistryConfig(**config.agent_registry)
+
+            # Extract agents from all groups
+            for group_name, group_config in registry_model.groups.items():
+                for agent_config in group_config.agents:
+                    agent_id = agent_config.id
+                    agent_info = AgentInfo(
+                        id=agent_id,
+                        proxy_id=agent_config.proxy_id,
+                        group=group_name,
+                        fqdn=agent_config.fqdn,
+                        health_endpoint=agent_config.health_endpoint,
+                        agent_card_endpoint=agent_config.agent_card_endpoint,
+                        capabilities=agent_config.capabilities,
+                        a2a_capabilities=agent_config.a2a_capabilities
+                    )
+                    agents[agent_id] = agent_info
+
+            return agents
+
+        except Exception as e:
+            raise ConfigurationError(f"Failed to extract agent registry from config: {e}") from e

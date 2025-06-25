@@ -54,3 +54,7 @@ This is a Python-based proxy service that enables A2A (Agent-to-Agent) protocol 
 - Implement exponential backoff for retries
 - Handle SSE reconnection gracefully
 - Log errors with correlation IDs for tracing
+
+## Proxy roles
+- **Coordinator Proxy**: Manages creation of Azure Service Bus topics/queues. Works like any other proxy but has these additional responsibilities.
+- **Follower Proxy**: Subscribes to Service Bus topics/queues created by the coordinator proxy
