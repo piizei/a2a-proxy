@@ -1,22 +1,3 @@
-# A2A (Agent2Agent) Protocol High-Level Summary
-
-This project defines and demonstrates the **Agent2Agent (A2A) protocol**, an open standard initiated by Google designed to enable communication and interoperability between disparate AI agent systems. The core goal is to allow agents built on different frameworks (e.g., LangGraph, CrewAI, Google ADK, Genkit) or by different vendors to discover each other's capabilities, negotiate interaction modes (text, forms, files, potentially audio/video later), and collaborate on tasks.
-
-The repository provides:
-
-1. **Formal Specification:** A detailed JSON Schema (`specification/json/a2a.json`) defining the structure of A2A messages, including requests, responses, task states, artifacts, and agent metadata (Agent Cards).
-2. **Core Concepts Documentation (Implied):** Links in the main README suggest documentation covering agent discovery, task lifecycle, artifact exchange, streaming updates, push notifications, and enterprise readiness.
-3. **Sample Implementations:**
-    - **Common Libraries:** Reusable Python (`samples/python/common`) and JavaScript/TypeScript (`samples/js/src`) code for building A2A clients and servers, handling JSON-RPC communication, task management, and potentially authentication.
-    - **Example Agents:** Demonstrations of integrating A2A into various agent frameworks:
-        - **Python:** LangGraph (currency conversion, streaming), CrewAI (image generation, file artifacts), Google ADK (expense reports, form handling).
-        - **JavaScript/TypeScript:** Genkit (movie info via API, code generation with file artifacts).
-    - **Example Hosts:** Applications that *consume* A2A services:
-        - CLIs in both Python and JS for direct interaction.
-        - A Python-based multi-agent orchestrator (using Google ADK) that delegates tasks to other A2A agents.
-4. **Demo Web Application:** A web UI (`demo/ui`, likely using Mesop) demonstrating multi-agent interactions facilitated by the A2A protocol, including visualization of conversations, tasks, events, and agent discovery. It features a backend service coordinating with the host agent.
-
-Key features of the A2A protocol highlighted by the specification and samples include: agent discovery via Agent Cards, standardized task management (send, get, cancel), support for different content types (text, files, structured data) via `Parts` and `Artifacts`, streaming updates for long-running tasks, and mechanisms for push notifications. The project is open source and encourages community contribution.
 
 # A2A (Agent2Agent) Protocol 
 
@@ -25,9 +6,7 @@ Key features of the A2A protocol highlighted by the specification and samples in
 - **Project Name:** Agent2Agent (A2A) Protocol
 - **Purpose:** An open protocol by Google enabling communication and interoperability between AI agents built on different frameworks or by different vendors.
 - **Core Goal:** Allow agents to discover capabilities, negotiate interaction, and collaborate securely on tasks.
-- **Communication:** Uses JSON-RPC 2.0 over HTTP(S). Supports standard request/response and Server-Sent Events (SSE) for streaming.  
-  *HTTP endpoints follow the `/v1/<resource>:<verb>` pattern (e.g., `/v1/messages:send`, `/v1/messages:stream`).  
-  Inside the HTTP body the JSON-RPC method names remain `message/send`, `message/stream`, etc., matching the proxy specification.*
+- **Communication:** Uses JSON-RPC 2.0 over HTTP(S). Supports standard request/response and Server-Sent Events (SSE) for streaming.
 - **Key Components:** Specification (JSON Schema), Common Libraries (Python, JS/TS), Sample Agents (LangGraph, CrewAI, ADK, Genkit), Sample Hosts (CLI, Orchestrator), Demo Web App (Mesop).
 
 ## 2. Protocol Specification (`specification/json/a2a.json`)
@@ -158,35 +137,16 @@ Key features of the A2A protocol highlighted by the specification and samples in
     - Authentication: Required using one of the schemes declared in the public `AgentCard.securitySchemes`.
     - Response: Complete `AgentCard` object with potentially additional details.
 
-### 2.2.1. Proxy Transport Envelope (Service Bus)
-When traffic is relayed through the Service-Bus proxy (`proxy.md`), each JSON-RPC request or
-response is wrapped in the following envelope before it is published:
-
-```jsonc
-{
-  "protocol": "a2a-jsonrpc-sse/1.0",
-  "group": "<agent-group>",
-  "toAgent": "<target-agent>",
-  "fromAgent": "<source-agent>",
-  "correlationId": "<uuid>",
-  "isStream": <bool>,
-  "sequence": <int>,           // for SSE chunk ordering
-  "payload": { /* original JSON-RPC message */ }
-}
-```
-
-The proxy strips this envelope before forwarding the inner JSON-RPC message to the destination
-agent; thus, the envelope is transparent to agents and the core protocol remains unchanged.
-
 ### 2.3. A2A RPC Methods
-- **`message/send`** – *HTTP path `/v1/messages:send`*  
-  - Sends a message to initiate or continue a task.
-  - `params`: `MessageSendParams` (includes `taskId`, `contextId`, `message`, optionally `configuration`).
-  - `result`: `Task` (final state after synchronous processing).
-- **`message/stream`** – *HTTP path `/v1/messages:stream`*  
-  - Sends a message and subscribes to real-time updates via Server-Sent Events (SSE).
-  - `params`: `MessageSendParams`.
-  - `result` (stream events): `SendStreamingMessageResponse` containing one of: `MessageEvent`, `TaskStatusUpdateEvent`, `TaskArtifactUpdateEvent`. Final event has `final: true`.
+
+- **`message/send`:** (Request/Response)
+    - Sends a message to initiate or continue a task.
+    - `params`: `MessageSendParams` (includes `taskId`, `contextId`, `message`, optionally `configuration`).
+    - `result`: `Task` (final state after synchronous processing).
+- **`message/stream`:** (Request/Stream)
+    - Sends a message and subscribes to real-time updates via Server-Sent Events (SSE).
+    - `params`: `MessageSendParams`.
+    - `result` (stream events): `SendStreamingMessageResponse` containing one of: `MessageEvent`, `TaskStatusUpdateEvent`, `TaskArtifactUpdateEvent`. Final event has `final: true`.
 - **`tasks/get`:** (Request/Response)
     - Retrieves the current state of a task.
     - `params`: `TaskQueryParams` (includes `id`, optionally `historyLength`).
@@ -277,4 +237,3 @@ agent; thus, the envelope is transparent to agents and the core protocol remains
 - **Input Validation:** Servers MUST rigorously validate all RPC parameters and the content/structure of data in `Message` and `Artifact` parts to prevent injection attacks or processing errors.
 - **Resource Management:** Implement rate limiting, concurrency controls, and resource limits to protect agents from abuse or overload.
 - **Data Privacy:** Adhere to all applicable privacy regulations for data exchanged in `Message` and `Artifact` parts. Minimize sensitive data transfer.
-
