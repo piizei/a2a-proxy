@@ -58,3 +58,14 @@ This is a Python-based proxy service that enables A2A (Agent-to-Agent) protocol 
 ## Proxy roles
 - **Coordinator Proxy**: Manages creation of Azure Service Bus topics/queues. Works like any other proxy but has these additional responsibilities.
 - **Follower Proxy**: Subscribes to Service Bus topics/queues created by the coordinator proxy
+
+# Developing
+
+## Linting
+uv run ruff format src
+
+## Typechecking
+uv run mypy src
+
+## Testing
+uv run pytest tests

@@ -12,6 +12,7 @@ from .models import (
     ServiceBusMessageType,
     ServiceBusSubscription,
 )
+from ..core.models import MessageEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ class MessageSubscriber:
         """Handle an incoming request message by routing it to a local agent."""
         try:
             envelope = message.envelope
-            logger.info(f"Handling incoming request for agent: {envelope.to_agent}, path: {envelope.http_path}")
+            logger.info(f"Handling incoming request for agent: {envelope.toAgent}, path: {envelope.path}")
 
             # Import here to avoid circular imports
             from ..main import agent_registry, message_publisher
@@ -179,22 +180,22 @@ class MessageSubscriber:
                 return
 
             # Find the agent info
-            agent_info = await agent_registry.get_agent(envelope.to_agent)
+            agent_info = await agent_registry.get_agent(envelope.toAgent)
             if not agent_info or not agent_info.fqdn:
-                logger.error(f"Agent not found or no FQDN: {envelope.to_agent}")
+                logger.error(f"Agent not found or no FQDN: {envelope.toAgent}")
                 return
 
             # Make HTTP request to the local agent
             import aiohttp
-            url = f"http://{agent_info.fqdn}{envelope.http_path}"
+            url = f"http://{agent_info.fqdn}{envelope.path}"
 
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.request(
-                        method=envelope.http_method,
+                        method=envelope.method,
                         url=url,
-                        headers=envelope.http_headers,
-                        data=message.payload if envelope.http_method != "GET" else None,
+                        headers=envelope.headers,
+                        data=message.payload if envelope.method != "GET" else None,
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as response:
                         response_data = await response.json()
@@ -208,32 +209,60 @@ class MessageSubscriber:
                         from ..main import config
                         current_proxy_id = config.id if config else "unknown-proxy"
 
-                        # Create a ServiceBusMessage with fromProxy property
+                        # Create a ServiceBusMessage with proper routing properties
                         from datetime import datetime
                         from uuid import uuid4
 
                         from .models import ServiceBusMessage, ServiceBusMessageType
 
+                        # Create response envelope with proper fields
+                        response_data = {
+                            "fromProxy": self.proxy_id,
+                            "toProxy": envelope.fromProxy,  # Send back to originating proxy
+                            "fromAgent": envelope.toAgent,   # The agent that handled the request
+                            "toAgent": envelope.fromAgent or "",  # Send back to original requesting agent if known
+                            "path": envelope.path,
+                            "correlationId": envelope.correlationId,
+                            "body": response_data,
+                            "headers": dict(response.headers),
+                            "statusCode": response.status,
+                            "sessionId": envelope.sessionId,
+                            "method": "RESPONSE"  # Indicate this is a response
+                        }
+
+                        # Handle SSE responses
+                        if "text/event-stream" in response.headers.get("content-type", ""):
+                            response_data["isSSE"] = True
+                            response_data["protocol"] = "sse"
+
+                        response_envelope = MessageEnvelope(**response_data)
+
+                        # Use the agent's group for topic routing
+                        response_topic = f"a2a.{agent_info.group}.responses"
+
                         response_message = ServiceBusMessage(
                             message_id=str(uuid4()),
-                            correlation_id=envelope.correlation_id,
-                            envelope=envelope,
+                            correlation_id=envelope.correlationId,
+                            envelope=response_envelope,
                             payload=response_payload,
                             message_type=ServiceBusMessageType.RESPONSE,
                             created_at=datetime.utcnow(),
-                            properties={"fromProxy": current_proxy_id}
+                            properties={
+                                "fromProxy": current_proxy_id,
+                                "toProxy": envelope.fromProxy  # Route back to original proxy
+                            }
                         )
 
                         success = await message_publisher.client.send_message(
-                            topic_name=f"a2a.{envelope.group}.responses",
+                            topic_name=response_topic,
                             message=response_message,
-                            session_id=envelope.correlation_id
+                            session_id=envelope.correlationId
                         )
 
                         if success:
-                            logger.info(f"Response sent via Service Bus, correlation_id: {envelope.correlation_id}")
+                            logger.info(f"Response sent via Service Bus, correlation_id: {envelope.correlationId}, toProxy: {envelope.fromProxy}")
                         else:
-                            logger.error(f"Failed to send response via Service Bus, correlation_id: {envelope.correlation_id}")
+                            logger.error(f"Failed to send response via Service Bus, correlation_id: {envelope.correlationId}")
 
             except aiohttp.ClientError as e:
                 logger.error(f"HTTP request to agent failed: {str(e)}")

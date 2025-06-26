@@ -86,7 +86,8 @@ class FileSessionStore(ISessionStore):
                 session_data["expires_at"] = datetime.fromisoformat(session_data["expires_at"])
 
             # Construct model with validation to handle missing fields
-            return SessionInfo.model_validate(session_data)
+            session_info: SessionInfo = SessionInfo.model_validate(session_data)
+            return session_info
 
         except (OSError, json.JSONDecodeError, ValueError):
             # Log error but don't raise - treat as session not found

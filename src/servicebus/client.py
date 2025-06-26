@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 
 from azure.core.exceptions import AzureError
 from azure.identity.aio import DefaultAzureCredential
@@ -41,6 +41,11 @@ class AzureServiceBusClient(IServiceBusClient):
         self._message_handlers: dict[str, MessageHandler] = {}
         self._running = False
         self._retry_lock = asyncio.Lock()
+
+        # Create a single credential instance to reuse
+        self._credential: Optional[DefaultAzureCredential] = None
+        if not self.config.connection_string:
+            self._credential = DefaultAzureCredential()
 
     async def start(self) -> None:
         """Start the Service Bus client."""
@@ -95,12 +100,13 @@ class AzureServiceBusClient(IServiceBusClient):
                 logger.info(f"Connecting to Azure Service Bus using connection string: {self.config.namespace}")
             else:
                 # Use managed identity authentication
-                credential = DefaultAzureCredential()
+                if not self._credential:
+                    raise ValueError("Managed identity credential not initialized")
                 fully_qualified_namespace = self.config.get_fully_qualified_namespace()
                 logger.info(f"Using managed identity for Azure Service Bus: {fully_qualified_namespace}")
                 self._client = AsyncServiceBusClient(
                     fully_qualified_namespace=fully_qualified_namespace,
-                    credential=credential
+                    credential=self._credential
                 )
                 logger.info(f"Connecting to Azure Service Bus using managed identity: {fully_qualified_namespace}")
 
@@ -218,32 +224,36 @@ class AzureServiceBusClient(IServiceBusClient):
         if azure_message.application_properties is None:
             azure_message.application_properties = {}
 
-        # Set basic properties
-        azure_message.application_properties["messageType"] = message.message_type.value
-        azure_message.application_properties["message_type"] = message.message_type.value  # Keep both for compatibility
-        azure_message.application_properties["toAgent"] = message.envelope.to_agent
-        azure_message.application_properties["fromAgent"] = message.envelope.from_agent
-        azure_message.application_properties["to_agent"] = message.envelope.to_agent  # Keep both for compatibility
-        azure_message.application_properties["from_agent"] = message.envelope.from_agent  # Keep both for compatibility
-        azure_message.application_properties["group"] = message.envelope.group
+        # Use local variable for type safety
+        properties = azure_message.application_properties
+
+        # Set basic properties using correct camelCase attribute names
+        properties["messageType"] = message.message_type.value
+        properties["message_type"] = message.message_type.value  # Keep both for compatibility
+        properties["toAgent"] = message.envelope.toAgent
+        properties["fromAgent"] = message.envelope.fromAgent or ""
+        properties["to_agent"] = message.envelope.toAgent  # Keep both for compatibility
+        properties["from_agent"] = message.envelope.fromAgent or ""  # Keep both for compatibility
         
         # Set proxy routing properties for response correlation
         if message.message_type == ServiceBusMessageType.RESPONSE:
             # For responses, toProxy should be the proxy that originally sent the request
-            azure_message.application_properties["toProxy"] = message.envelope.proxy_id
+            if message.envelope.toProxy:
+                properties["toProxy"] = message.envelope.toProxy
             # Check if fromProxy is provided in message properties
-            if "fromProxy" in message.properties:
-                azure_message.application_properties["fromProxy"] = message.properties["fromProxy"]
+            if message.properties and "fromProxy" in message.properties:
+                properties["fromProxy"] = message.properties["fromProxy"]
         else:
             # For requests, fromProxy is the current proxy
-            azure_message.application_properties["fromProxy"] = message.envelope.proxy_id
+            properties["fromProxy"] = message.envelope.fromProxy
         
         # Add additional properties individually to ensure type compatibility
-        for key, value in message.properties.items():
-            if isinstance(value, str | int | float | bool):
-                azure_message.application_properties[key] = value
-            else:
-                azure_message.application_properties[key] = str(value)
+        if message.properties:
+            for key, value in message.properties.items():
+                if isinstance(value, (str, int, float, bool)):
+                    properties[key] = value
+                else:
+                    properties[key] = str(value)
 
         return azure_message
 
@@ -321,7 +331,7 @@ class AzureServiceBusClient(IServiceBusClient):
                 else:
                     # Shutdown was requested
                     logger.info(f"Message processing ended normally for subscription: {subscription_name} (shutdown requested)")
-                    break
+                    break  # type: ignore[unreachable]
                 
             except Exception as e:
                 restart_count += 1

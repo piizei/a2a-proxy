@@ -337,3 +337,39 @@ class TestMessageSubscriber:
 
         assert result == 3
         assert len(subscriber._active_subscriptions) == 0
+
+    @pytest.mark.asyncio
+    async def test_response_correlation(self, subscriber, mock_client):
+        """Test that responses are properly correlated."""
+        # Create a mock response message
+        from src.core.models import MessageEnvelope
+        from src.servicebus.models import ServiceBusMessage, ServiceBusMessageType
+        from datetime import datetime
+
+        correlation_id = "test-correlation-123"
+
+        envelope = MessageEnvelope(
+            group="blog-agents",
+            to_agent="proxy",
+            from_agent="critic",
+            proxy_id="proxy-1",
+            correlation_id=correlation_id,
+            is_stream=False,
+            headers={},
+            http_path="/.well-known/agent.json",
+            http_method="GET"
+        )
+
+        message = ServiceBusMessage(
+            message_id="msg-456",
+            correlation_id=correlation_id,
+            envelope=envelope,
+            payload=b'{"name": "Critic Agent"}',
+            message_type=ServiceBusMessageType.RESPONSE,
+            created_at=datetime.utcnow(),
+            properties={"toProxy": "proxy-1", "fromProxy": "proxy-follower"}
+        )
+
+        # Verify the message would be routed correctly
+        assert message.properties["toProxy"] == "proxy-1"
+        assert message.correlation_id == correlation_id

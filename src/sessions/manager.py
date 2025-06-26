@@ -84,10 +84,11 @@ class SessionManager:
                 # Wait for cleanup interval
                 await asyncio.sleep(self.config.cleanup_interval_seconds)
 
+                # Double-check if still running after sleep
                 if not self._running:
                     break
 
-                # Cleanup expired sessions
+                # Cleanup expired sessions - this is reachable when _running is True
                 removed_count = await self.session_store.cleanup_expired_sessions()
                 if removed_count > 0:
                     logger.info(f"Cleaned up {removed_count} expired sessions")

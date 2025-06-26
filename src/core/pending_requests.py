@@ -240,9 +240,8 @@ class PendingRequestManager:
             logger.info(f"Cleaning up {len(expired_requests)} expired requests")
             
             for correlation_id in expired_requests:
-                request = self._pending_requests.pop(correlation_id, None)
-                if request:
-                    request.complete_with_timeout()
+                request = self._pending_requests.pop(correlation_id)
+                request.complete_with_timeout()
                     
         if expired_requests:
             logger.debug(f"Cleaned up expired requests", count=len(expired_requests), 

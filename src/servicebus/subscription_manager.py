@@ -69,7 +69,7 @@ class SubscriptionManager:
         if not self._admin_client:
             raise RuntimeError("SubscriptionManager not initialized")
 
-        results = {}
+        results: dict[str, bool] = {}
         
         # Handle coordinators or proxies with no subscriptions
         if not config.subscriptions:
@@ -244,7 +244,7 @@ class SubscriptionManager:
         if not self._admin_client:
             raise RuntimeError("SubscriptionManager not initialized")
 
-        results = {}
+        results: dict[str, bool] = {}
         
         try:
             # List all topics
@@ -324,13 +324,11 @@ class SubscriptionManager:
                                 try:
                                     if isinstance(rule.filter, SqlRuleFilter):
                                         filter_rule = rule.filter.sql_expression
-                                        break
                                     elif isinstance(rule.filter, CorrelationRuleFilter):
                                         filter_rule = f"Correlation filter"
-                                        break
                                     else:
                                         filter_rule = str(rule.filter)
-                                        break
+                                    break
                                 except Exception:
                                     filter_rule = "Unknown filter"
                                     break

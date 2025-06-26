@@ -17,9 +17,9 @@ hostedAgents: {}
 # Coordinator subscriptions - receives responses from agent groups it manages
 subscriptions:
   - group: "blog-agents"
-    filter: "messageType = 'response' AND toProxy = 'proxy-1'"
+    filter: "toProxy = 'proxy-1'"  # Simplified filter for responses
   - group: "research-agents" 
-    filter: "messageType = 'response' AND toProxy = 'proxy-1'"
+    filter: "toProxy = 'proxy-1'"  # Simplified filter for responses
   - group: "notifications"
     filter: "messageType = 'notification' AND (toProxy = 'proxy-1' OR toProxy IS NULL)"
 

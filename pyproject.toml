@@ -18,6 +18,7 @@ dependencies = [
     "tenacity>=8.2.3",
     "aiohttp>=3.12.13",
     "azure-mgmt-servicebus>=9.0.0",
+    "types-pyyaml>=6.0.12.20250516",
 ]
 
 [project.optional-dependencies]
@@ -72,6 +73,41 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 
+[[tool.mypy.overrides]]
+module = "src.main"
+disallow_untyped_decorators = false
+# Ignore structured logging keyword argument issues
+disable_error_code = ["call-arg"]
+
+[[tool.mypy.overrides]]
+module = "src.core.pending_requests"
+# Ignore structured logging keyword argument issues  
+disable_error_code = ["call-arg"]
+
+[[tool.mypy.overrides]]
+module = "fastapi.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "uvicorn.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "structlog.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "httpx.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "azure.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "aiohttp.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
@@ -88,4 +124,5 @@ dev = [
     "ruff>=0.11.13",
     "types-aiofiles>=24.1.0.20250606",
     "types-pyyaml>=6.0.12.20250516",
+    "types-requests>=2.32.4.20250611",
 ]

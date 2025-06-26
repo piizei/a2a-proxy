@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from fastapi import FastAPI, HTTPException, Request
@@ -55,7 +55,7 @@ logger=logging.getLogger('azure.core.pipeline.policies.http_logging_policy')
 logger.setLevel(logging.WARNING)
 
 
-logger = structlog.get_logger()
+logger = cast(Any, structlog.get_logger())
 
 # Global instances
 config: ProxyConfig | None = None
@@ -495,7 +495,8 @@ async def get_agent_card_by_path(
             response["url"] = f"{base_url}/agents/{agent_id}"
 
         logger.info("Agent card fetched successfully", extra={"agent_id": agent_id})
-        return response
+        result: dict[str, Any] = response
+        return result
 
     except AgentNotFoundError as e:
         logger.warning("Agent not found", extra={"agent_id": agent_id})

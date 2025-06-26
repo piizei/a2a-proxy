@@ -1,9 +1,11 @@
 """Core data models for the A2A Service Bus Proxy."""
 
+from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 # Forward declaration to avoid circular imports
 if TYPE_CHECKING:
@@ -39,32 +41,56 @@ class AgentInfo:
 
 
 @dataclass
-class MessageEnvelope:
-    """Service Bus message envelope for A2A communication."""
-    group: str = ""
-    to_agent: str = ""
-    from_agent: str = ""
-    correlation_id: str = ""
-    proxy_id: str = ""
-    http_path: str = ""
-    http_method: str = "POST"
-    http_headers: dict[str, str] = field(default_factory=dict)
-    is_stream: bool = False
-    session_id: str | None = None
-    reply_to: str | None = None
-    timestamp: int = field(default_factory=lambda: int(datetime.utcnow().timestamp() * 1000))
-    ttl: int = 300000  # 5 minutes default
-    payload: dict[str, Any] = field(default_factory=dict)
-    stream_metadata: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        """Validate envelope after initialization."""
-        if not self.correlation_id:
-            raise ValueError("Correlation ID is required")
-        if not self.to_agent:
-            raise ValueError("Target agent is required")
-        if self.ttl <= 0:
+class MessageEnvelope(BaseModel):
+    """Envelope for messages sent via Service Bus."""
+    
+    model_config = ConfigDict(extra="forbid")
+    
+    # Routing metadata (required)
+    fromProxy: str
+    toAgent: str
+    path: str
+    correlationId: str
+    
+    # Routing metadata (optional with defaults)
+    toProxy: str | None = None
+    fromAgent: str | None = None
+    method: str = "POST"
+    protocol: str = "http"
+    
+    # Request data (with defaults)
+    body: Any = None
+    headers: Dict[str, str] = Field(default_factory=dict)
+    queryParams: Dict[str, str] = Field(default_factory=dict)
+    
+    # Session management (with defaults)
+    sessionId: str | None = None
+    sequence: int | None = None
+    
+    # Reply routing (with defaults)
+    replyTo: str | None = None
+    
+    # SSE/Streaming support (with defaults)
+    isSSE: bool = False
+    sseEvent: str | None = None
+    sseId: str | None = None
+    sseRetry: int | None = None
+    streamMetadata: Dict[str, Any] | None = None
+    
+    # Response metadata (with defaults)
+    statusCode: int | None = None
+    
+    # Message metadata (with defaults)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ttl: int = 3600  # Default 1 hour TTL
+    
+    @field_validator('ttl')
+    @classmethod
+    def validate_ttl(cls, v: int) -> int:
+        """Validate TTL is positive."""
+        if v <= 0:
             raise ValueError("TTL must be positive")
+        return v
 
 
 @dataclass
@@ -161,4 +187,13 @@ class A2AConstants:
     SSE_DATA_EVENT = "data"
     SSE_ERROR_EVENT = "error"
     SSE_END_EVENT = "end"
+    DEFAULT_RETRY_MS = 1000
+    # Stream Constants
+    SSE_DATA_EVENT = "data"
+    SSE_ERROR_EVENT = "error"
+    SSE_END_EVENT = "end"
+    DEFAULT_RETRY_MS = 1000
+    SSE_ERROR_EVENT = "error"
+    SSE_END_EVENT = "end"
+    DEFAULT_RETRY_MS = 1000
     DEFAULT_RETRY_MS = 1000

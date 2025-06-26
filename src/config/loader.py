@@ -87,7 +87,7 @@ class ConfigLoader:
         Returns:
             Dictionary mapping agent IDs to AgentInfo objects
         """
-        agents = {}
+        agents: dict[str, AgentInfo] = {}
 
         if not config.agent_registry:
             return agents

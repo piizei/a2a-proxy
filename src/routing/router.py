@@ -1,6 +1,5 @@
 """Message router for handling A2A protocol routing."""
 
-import json
 import logging
 from typing import Any
 from uuid import uuid4
@@ -139,7 +138,7 @@ class MessageRouter:
             if response.status_code == 200:
                 content_type = response.headers.get("content-type", "")
                 if "application/json" in content_type:
-                    result = response.json()
+                    result: dict[str, Any] = response.json()
                 else:
                     result = {"data": response.text, "content_type": content_type}
                 
@@ -195,54 +194,63 @@ class MessageRouter:
             )
 
         try:
-            # Create message envelope
-            envelope = MessageEnvelope(
-                group=agent_info.group,
-                to_agent=agent_info.id,
-                from_agent="proxy",  # TODO: Get from request context
-                correlation_id=correlation_id or str(uuid4()),
-                proxy_id=self.proxy_id,
-                http_path=http_path,
-                http_method=http_method,
-                http_headers=headers or {}
+            # Build correlation/session id once so both values match
+            correlation_id_value = correlation_id or str(uuid4())
+
+            # Optional “fromAgent” header (if caller included it)
+            from_agent = (headers or {}).get("X-From-Agent")
+
+            envelope_data: dict[str, Any] = {
+                "fromProxy": self.proxy_id,
+                "toAgent": agent_info.id,
+                "path": http_path,
+                "correlationId": correlation_id_value,
+                "toProxy": agent_info.proxy_id,
+                "method": http_method,
+                "body": payload,
+                "headers": headers or {},
+                "queryParams": {},
+                "sessionId": correlation_id_value,  # correlationId === sessionId
+            }
+            if from_agent:
+                envelope_data["fromAgent"] = from_agent
+
+            envelope = MessageEnvelope(**envelope_data)
+
+            # Send to appropriate topic based on group
+            topic_name = f"a2a.{agent_info.group}.requests"
+
+            logger.info(
+                f"Routing to remote agent",
+                extra={
+                    "agent_id": agent_info.id,
+                    "proxy_id": agent_info.proxy_id,
+                    "path": http_path,
+                    "correlation_id": correlation_id,
+                    "topic": topic_name
+                }
             )
 
-            # Serialize payload
-            payload_bytes = json.dumps(payload or {}).encode('utf-8')
-
-            # Publish to Service Bus (use correlation_id as session_id for ordering)
+            # Send and wait for response
+            import json
+            payload_bytes = json.dumps(envelope.dict()).encode('utf-8')
             success = await self.message_publisher.publish_request(
                 envelope=envelope,
                 payload=payload_bytes,
-                session_id=envelope.correlation_id
+                session_id=correlation_id_value
             )
-
+            
             if success:
-                logger.info(f"Remote routing successful agent_id={agent_info.id}")
-
-                # Create a pending request to wait for the response
-                from ..main import pending_request_manager
-                if pending_request_manager:
-                    await pending_request_manager.create_request(
-                        correlation_id=envelope.correlation_id,
-                        timeout_seconds=30,
-                        metadata={
-                            "agent_id": agent_info.id,
-                            "http_path": http_path,
-                            "http_method": http_method
-                        }
-                    )
-
-                # Return acknowledgment with correlation_id for response waiting
+                # For now, return a placeholder response indicating the message was sent
+                # TODO: Implement proper request/response correlation using PendingRequestManager
                 return {
-                    "status": "routed",
-                    "agent_id": agent_info.id,
-                    "correlation_id": envelope.correlation_id,
-                    "message": "Request routed to remote agent via Service Bus"
+                    "status": "sent",
+                    "correlation_id": correlation_id_value,
+                    "message": "Request forwarded to remote agent"
                 }
             else:
                 raise A2AProxyError(
-                    f"Failed to publish message to Service Bus for agent {agent_info.id}",
+                    f"Failed to publish request to Service Bus",
                     error_code=-32003  # TIMEOUT_ERROR
                 )
 
@@ -277,6 +285,7 @@ class MessageRouter:
             headers={"Content-Type": "application/json"},
             correlation_id=correlation_id
         )
+
 
     async def close(self) -> None:
         """Close the message router and cleanup resources."""

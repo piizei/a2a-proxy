@@ -33,7 +33,7 @@ class AgentRegistry(IAgentRegistry):
         self._http_client = httpx.AsyncClient(timeout=10.0)
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[override]
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any) -> None:
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
@@ -66,7 +66,7 @@ class AgentRegistry(IAgentRegistry):
         async def check(agent_id: str, info: AgentInfo) -> None:
             url = f"http://{info.fqdn}{info.health_endpoint}" if info.fqdn else None
             status = "unknown"
-            if url:
+            if url and self._http_client:
                 try:
                     resp = await self._http_client.get(url)
                     status = "healthy" if resp.status_code == 200 else "unhealthy"
@@ -90,7 +90,8 @@ class AgentRegistry(IAgentRegistry):
         try:
             resp = await self._http_client.get(url)
             resp.raise_for_status()
-            return resp.json()
+            result: dict[str, Any] = resp.json()
+            return result
         except httpx.HTTPError as exc:
             return {
                 "name": f"Agent {agent_info.id}",

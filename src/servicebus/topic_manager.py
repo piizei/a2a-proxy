@@ -93,12 +93,12 @@ class TopicManager:
             'exponential_base': 2.0
         }
     
-    async def __aenter__(self):
+    async def __aenter__(self) -> "TopicManager":
         """Async context manager entry."""
         await asyncio.get_event_loop().run_in_executor(self._executor, self._connect)
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         await asyncio.get_event_loop().run_in_executor(self._executor, self._disconnect)
     
@@ -180,7 +180,7 @@ class TopicManager:
             "enable_express": False,  # Express topics don't support ordering
         }
     
-    async def _retry_operation(self, operation, *args, **kwargs) -> Any:
+    async def _retry_operation(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         """Execute operation with exponential backoff retry.
         
         Args:
@@ -194,7 +194,7 @@ class TopicManager:
         last_exception = None
         delay = self._retry_config['base_delay']
         
-        for attempt in range(self._retry_config['max_attempts']):
+        for attempt in range(int(self._retry_config['max_attempts'])):
             try:
                 # Run the synchronous operation in a thread pool
                 loop = asyncio.get_event_loop()
@@ -302,7 +302,7 @@ class TopicManager:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Process results
-        topic_results = {}
+        topic_results: Dict[TopicType, TopicOperationResult] = {}
         for i, (topic_type, result) in enumerate(zip(topic_types, results)):
             if isinstance(result, Exception):
                 topic_name = self._get_topic_name(group_config.name, topic_type)
@@ -313,6 +313,8 @@ class TopicManager:
                     error=str(result)
                 )
             else:
+                # result is TopicOperationResult here
+                assert isinstance(result, TopicOperationResult)
                 topic_results[topic_type] = result
         
         return TopicSetResult(
@@ -347,7 +349,7 @@ class TopicManager:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # Process results
-            topic_results = {}
+            topic_results: Dict[str, TopicSetResult] = {}
             for i, (group, result) in enumerate(zip(groups, results)):
                 if isinstance(result, Exception):
                     logger.error(f"Failed to create topics for group {group.name}: {str(result)}")
@@ -371,6 +373,8 @@ class TopicManager:
                         )
                     )
                 else:
+                    # result is TopicSetResult here
+                    assert isinstance(result, TopicSetResult)
                     topic_results[group.name] = result
                     if result.is_successful:
                         logger.info(f"Successfully ensured topics for group: {group.name}")
@@ -403,6 +407,8 @@ class TopicManager:
         for topic_type in topic_types:
             topic_name = self._get_topic_name(group_name, topic_type)
             try:
+                if not self._admin_client:
+                    raise A2AProxyError("Admin client not connected")
                 topic = await self._retry_operation(self._admin_client.get_topic, topic_name)
                 health_result.topics[topic_name] = True
                 logger.debug(f"Topic {topic_name} is healthy")
@@ -437,7 +443,9 @@ class TopicManager:
             self._connect()
         
         try:
-            def _list_topics():
+            def _list_topics() -> List[str]:
+                if not self._admin_client:
+                    raise A2AProxyError("Admin client not connected")
                 all_topics = []
                 for topic in self._admin_client.list_topics():
                     if topic.name.startswith("a2a."):
@@ -472,6 +480,8 @@ class TopicManager:
         for topic_type in topic_types:
             topic_name = self._get_topic_name(group_name, topic_type)
             try:
+                if not self._admin_client:
+                    raise A2AProxyError("Admin client not connected")
                 await self._retry_operation(self._admin_client.delete_topic, topic_name)
                 results[topic_name] = True
                 logger.info(f"Deleted topic: {topic_name}")
@@ -537,11 +547,11 @@ class TopicManager:
         if self._executor:
             self._executor.shutdown(wait=True)
     
-    def __enter__(self):
+    def __enter__(self) -> "TopicManager":
         """Context manager entry."""
         self._connect()
         return self
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Context manager exit."""
         self.close()
