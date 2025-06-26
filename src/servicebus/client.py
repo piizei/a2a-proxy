@@ -208,7 +208,7 @@ class AzureServiceBusClient(IServiceBusClient):
         """Create Azure Service Bus message from our message."""
         # Serialize envelope and payload
         message_body = {
-            "envelope": message.envelope.__dict__,
+            "envelope": message.envelope.model_dump(),
             "payload": message.payload.decode('utf-8') if isinstance(message.payload, bytes) else message.payload
         }
 
