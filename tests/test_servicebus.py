@@ -33,10 +33,11 @@ def servicebus_config():
 def message_envelope():
     """Message envelope fixture."""
     return MessageEnvelope(
-        to_agent="test-agent",
-        from_agent="caller-agent",
-        correlation_id="test-correlation-id",
-        group="test-group"
+        fromProxy="proxy-1",
+        toAgent="test-agent",
+        path="/test",
+        correlationId="test-correlation-id",
+        fromAgent="caller-agent",
     )
 
 
@@ -349,15 +350,14 @@ class TestMessageSubscriber:
         correlation_id = "test-correlation-123"
 
         envelope = MessageEnvelope(
-            group="blog-agents",
-            to_agent="proxy",
-            from_agent="critic",
-            proxy_id="proxy-1",
-            correlation_id=correlation_id,
-            is_stream=False,
+            fromProxy="proxy-follower",
+            toAgent="proxy",
+            toProxy="proxy-1",
+            path="/.well-known/agent.json",
+            method="GET",
+            correlationId=correlation_id,
+            fromAgent="critic",
             headers={},
-            http_path="/.well-known/agent.json",
-            http_method="GET"
         )
 
         message = ServiceBusMessage(

@@ -40,7 +40,6 @@ class AgentInfo:
             raise ValueError("Agent group cannot be empty")
 
 
-@dataclass
 class MessageEnvelope(BaseModel):
     """Envelope for messages sent via Service Bus."""
     
